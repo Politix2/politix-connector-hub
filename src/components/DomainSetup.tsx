@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 // Mock function to generate topics based on domain
 const generateTopicsForDomain = (domain: string): string[] => {
@@ -37,21 +38,28 @@ const DomainSetup = ({ onComplete }: DomainSetupProps) => {
   const [step, setStep] = useState<"domain" | "topics">("domain");
   const [topics, setTopics] = useState<string[]>([]);
   const navigate = useNavigate();
+  const { toast } = useToast();
 
-  const handleDomainSubmit = (e: React.FormEvent) => {
+  const handleDomainSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!domain) return;
     
-    const suggestedTopics = generateTopicsForDomain(domain);
-    setTopics(suggestedTopics);
-    setStep("topics");
+    try {
+      // In a real app, this would call your backend API
+      // For now, we'll use our mock function
+      const suggestedTopics = generateTopicsForDomain(domain);
+      setTopics(suggestedTopics);
+      setStep("topics");
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to suggest topics for your domain",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleComplete = () => {
-    // Save domain and topics to localStorage
-    localStorage.setItem("userDomain", domain);
-    localStorage.setItem("userTopics", JSON.stringify(topics));
-    
     // Notify parent component
     onComplete(domain, topics);
     
