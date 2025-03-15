@@ -6,7 +6,7 @@ python-dotenv==1.0.1
 
 # Database
 supabase==2.5.0
-postgrest==0.13.0
+postgrest
 
 # Authentication
 python-jose==3.3.0
