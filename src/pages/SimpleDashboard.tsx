@@ -1,6 +1,5 @@
 
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import DomainSetup from "@/components/DomainSetup";
@@ -17,7 +16,6 @@ interface Topic {
 const SimpleDashboard = () => {
   const [setupComplete, setSetupComplete] = useState(false);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const navigate = useNavigate();
   const { toast } = useToast();
   
   useEffect(() => {
@@ -25,16 +23,24 @@ const SimpleDashboard = () => {
     const savedTopics = localStorage.getItem("userTopics");
     if (savedTopics) {
       try {
-        // Convert string topics to Topic objects with descriptions
+        // Parse saved topics JSON
         const parsedTopics = JSON.parse(savedTopics);
+        
+        // Ensure all topics follow Topic interface
         const topicsWithDescriptions: Topic[] = Array.isArray(parsedTopics) 
-          ? parsedTopics.map((topic: string | Topic) => {
-              // If the saved topic is already a Topic object
-              if (typeof topic === 'object' && topic !== null) {
-                return topic;
+          ? parsedTopics.map((topic: any) => {
+              // If the saved topic already has name and description properties
+              if (typeof topic === 'object' && topic !== null && 'name' in topic && 'description' in topic) {
+                return {
+                  name: String(topic.name),
+                  description: String(topic.description)
+                };
               }
-              // If it's just a string, convert it to a Topic object
-              return { name: topic, description: "" };
+              // If it's just a string or something else, convert it to a Topic object
+              return { 
+                name: typeof topic === 'string' ? topic : String(topic),
+                description: ""
+              };
             })
           : [];
         
@@ -76,13 +82,16 @@ const SimpleDashboard = () => {
 
   const handleReset = () => {
     localStorage.removeItem("userDomain");
+    localStorage.removeItem("userEmail");
     localStorage.removeItem("userTopics");
     setSetupComplete(false);
     setTopics([]);
     toast({
       title: "Setup reset",
-      description: "You can now start fresh with a new domain and topics.",
+      description: "You can now start fresh with a new email and topics.",
     });
+    // Redirect to home page after reset
+    window.location.href = "/";
   };
   
   if (!setupComplete) {
