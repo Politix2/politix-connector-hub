@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import UUID4, BaseModel
 
 from app.db import db
 from app.models import (
@@ -16,15 +16,19 @@ from app.models import (
     TopicMentionResponse,
     TopicResponse,
     TopicSubscription,
+    TopicSubscriptionCreate,
     TopicUpdate,
     Tweet,
     User,
+    UserCreate,
 )
 from app.services.analyzer import analyzer
 from app.services.collector import collector
+from app.services.topic_analyzer import TopicAnalyzer
 
 # API Router
 router = APIRouter(prefix="/api", tags=["api"])
+topic_analyzer = TopicAnalyzer()
 
 
 # Additional request/response models
@@ -69,13 +73,6 @@ class UserResponse(BaseModel):
     last_login: Optional[datetime] = None
 
 
-class UserCreate(BaseModel):
-    """Model for creating a new user."""
-
-    email: str
-    name: Optional[str] = None
-
-
 class SubscriptionResponse(BaseModel):
     """Response for topic subscription."""
 
@@ -86,6 +83,22 @@ class SubscriptionResponse(BaseModel):
     created_at: datetime
 
 
+# Models for analysis
+class AnalysisResponse(BaseModel):
+    id: str
+    topic_id: str
+    summary: str
+    sentiment: str
+    analyzed_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class TopicAnalysisRequest(BaseModel):
+    topic_id: str
+
+
 # Endpoints
 @router.get("/health")
 async def health_check():
@@ -94,25 +107,23 @@ async def health_check():
 
 
 # User endpoints
-@router.post("/users", response_model=UserResponse)
-async def create_user(user_data: UserCreate):
+@router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserCreate):
     """Create a new user."""
     # Check if user with this email already exists
-    existing_user = db.get_user_by_email(user_data.email)
+    existing_user = db.get_user_by_email(user.email)
     if existing_user:
         raise HTTPException(
             status_code=400, detail="User with this email already exists"
         )
 
     # Create new user
-    user = User(
-        email=user_data.email, name=user_data.name, created_at=datetime.utcnow()
-    )
+    user = User(email=user.email, name=user.name, created_at=datetime.utcnow())
     created_user = db.insert_user(user)
     return created_user
 
 
-@router.get("/users/{user_id}", response_model=UserResponse)
+@router.get("/users/{user_id}", response_model=User)
 async def get_user(user_id: str):
     """Get a user by ID."""
     user = db.get_user_by_id(user_id)
@@ -122,21 +133,15 @@ async def get_user(user_id: str):
 
 
 # Topic endpoints
-@router.post("/topics", response_model=TopicResponse)
-async def create_topic(topic_data: TopicCreate, user_id: str):
+@router.post("/topics", response_model=Topic, status_code=status.HTTP_201_CREATED)
+async def create_topic(topic: TopicCreate):
     """Create a new topic for tracking."""
-    # Verify user exists
-    user = db.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
     # Create the topic
     topic = Topic(
-        name=topic_data.name,
-        description=topic_data.description,
-        keywords=topic_data.keywords,
-        user_id=user_id,
-        is_public=topic_data.is_public,
+        name=topic.name,
+        description=topic.description,
+        keywords=topic.keywords,
+        is_public=topic.is_public,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -145,30 +150,23 @@ async def create_topic(topic_data: TopicCreate, user_id: str):
     # Return with counts
     topic_dict = created_topic.dict()
     topic_dict["mentions_count"] = 0  # New topic, no mentions yet
-    return TopicResponse(**topic_dict)
+    return Topic(**topic_dict)
 
 
-@router.get("/topics", response_model=List[TopicResponse])
-async def get_topics(user_id: Optional[str] = None, is_public: Optional[bool] = None):
-    """Get topics with optional filtering."""
-    topics = db.get_topics(user_id=user_id, is_public=is_public)
-
-    # Add mention counts to each topic
-    result = []
-    for topic in topics:
-        topic_with_count = db.get_topic_with_mentions_count(topic.id)
-        result.append(TopicResponse(**topic_with_count))
-
-    return result
+@router.get("/topics", response_model=List[Topic])
+async def get_topics():
+    """Get all public topics."""
+    topics = db.get_topics(is_public=True)
+    return topics
 
 
-@router.get("/topics/{topic_id}", response_model=TopicResponse)
+@router.get("/topics/{topic_id}", response_model=Topic)
 async def get_topic(topic_id: str):
-    """Get a specific topic."""
-    topic_with_count = db.get_topic_with_mentions_count(topic_id)
-    if not topic_with_count:
+    """Get a topic by ID."""
+    topic = db.get_topic(topic_id)
+    if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
-    return TopicResponse(**topic_with_count)
+    return topic
 
 
 @router.put("/topics/{topic_id}", response_model=TopicResponse)
@@ -429,3 +427,45 @@ async def collect_data(request: CollectionRequest = None):
     return CollectionResponse(
         new_sessions=result["new_sessions"], new_tweets=result["new_tweets"]
     )
+
+
+# Analysis routes
+@router.post("/analyses", response_model=AnalysisResponse)
+async def analyze_topic(request: TopicAnalysisRequest):
+    """
+    Analyze a topic using the LLM analyzer.
+
+    This endpoint will:
+    1. Fetch plenary sessions and tweets from the database
+    2. Use an LLM to find and extract content relevant to the topic
+    3. Analyze and summarize the content
+    4. Store the result in the database
+    """
+    try:
+        result = topic_analyzer.analyze_topic(request.topic_id)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to analyze topic",
+            )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error analyzing topic: {str(e)}",
+        )
+
+
+@router.get("/topics/{topic_id}/analyses", response_model=List[AnalysisResponse])
+async def get_topic_analyses(topic_id: str):
+    """Get all analyses for a specific topic."""
+    try:
+        analyses = topic_analyzer.get_analyses_for_topic(topic_id)
+        return analyses
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving analyses: {str(e)}",
+        )
