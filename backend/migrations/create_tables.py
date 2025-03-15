@@ -13,6 +13,7 @@ import sys
 
 from dotenv import load_dotenv
 from loguru import logger
+
 from supabase import Client, create_client
 
 # Configure logger

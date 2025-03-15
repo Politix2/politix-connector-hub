@@ -5,7 +5,13 @@ from loguru import logger
 
 from app.db import db
 from app.llm import llm
-from app.models import PlenarySession, TopicAnalysis, Tweet
+from app.models import (
+    PlenarySession,
+    Topic,
+    TopicAnalysis,
+    TopicMention,
+    Tweet,
+)
 
 
 class ContentAnalyzer:
@@ -47,6 +53,16 @@ class ContentAnalyzer:
             )
             db.insert_topic_analysis(topic_analysis)
 
+            # Check for user-defined topics in the content
+            await self.detect_user_topics(
+                content_id=session_id,
+                content_type="plenary_session",
+                content_text=session.content,
+                title=session.title,
+                analyzed_topics=analysis_result.get("topics", []),
+                analyzed_keywords=analysis_result.get("keywords", []),
+            )
+
             logger.info(f"Successfully analyzed plenary session {session_id}")
             return analysis_result
         else:
@@ -84,11 +100,129 @@ class ContentAnalyzer:
             )
             db.insert_topic_analysis(topic_analysis)
 
+            # Check for user-defined topics in the content
+            await self.detect_user_topics(
+                content_id=tweet_id,
+                content_type="tweet",
+                content_text=tweet.content,
+                title=f"Tweet by {tweet.user_handle}",
+                analyzed_topics=analysis_result.get("topics", []),
+                analyzed_keywords=analysis_result.get("keywords", []),
+            )
+
             logger.info(f"Successfully analyzed tweet {tweet_id}")
             return analysis_result
         else:
             logger.error(f"Failed to update analysis for tweet {tweet_id}")
             return None
+
+    async def detect_user_topics(
+        self,
+        content_id: str,
+        content_type: str,
+        content_text: str,
+        title: str,
+        analyzed_topics: List[str] = None,
+        analyzed_keywords: List[str] = None,
+    ) -> List[TopicMention]:
+        """
+        Detect mentions of user-defined topics in content.
+
+        Args:
+            content_id: ID of the content being analyzed
+            content_type: "plenary_session" or "tweet"
+            content_text: The text content to analyze
+            title: Title or identifier for the content
+            analyzed_topics: Topics already extracted by LLM analysis
+            analyzed_keywords: Keywords already extracted by LLM analysis
+
+        Returns:
+            List of topic mentions detected
+        """
+        logger.info(f"Detecting user-defined topics in {content_type} {content_id}")
+
+        content_lower = content_text.lower()
+        mentions = []
+
+        # Get all user-defined topics
+        topics = db.get_topics()
+
+        for topic in topics:
+            # Check if any of the topic's keywords are in the content
+            found_keywords = []
+            for keyword in topic.keywords:
+                if keyword.lower() in content_lower:
+                    found_keywords.append(keyword)
+
+            # Check if the topic name itself is in the content
+            if topic.name.lower() in content_lower:
+                found_keywords.append(topic.name)
+
+            # Check if LLM detected any matching topics or keywords
+            if analyzed_topics:
+                for analyzed_topic in analyzed_topics:
+                    if analyzed_topic.lower() == topic.name.lower() or any(
+                        keyword.lower() in analyzed_topic.lower()
+                        for keyword in topic.keywords
+                    ):
+                        found_keywords.append(analyzed_topic)
+
+            if analyzed_keywords:
+                for analyzed_keyword in analyzed_keywords:
+                    if analyzed_keyword.lower() == topic.name.lower() or any(
+                        keyword.lower() in analyzed_keyword.lower()
+                        for keyword in topic.keywords
+                    ):
+                        found_keywords.append(analyzed_keyword)
+
+            # If there's a match, create a topic mention
+            if found_keywords:
+                # Create a context snippet showing where the topic was mentioned
+                context = self.extract_context(content_text, found_keywords[0], 150)
+
+                # Create topic mention
+                mention = TopicMention(
+                    topic_id=topic.id,
+                    content_id=content_id,
+                    content_type=content_type,
+                    mention_context=context,
+                    detected_at=datetime.utcnow(),
+                    is_notified=False,
+                )
+
+                saved_mention = db.insert_topic_mention(mention)
+                if saved_mention:
+                    mentions.append(saved_mention)
+                    logger.info(
+                        f"Detected topic '{topic.name}' in {content_type} '{title}'"
+                    )
+
+        return mentions
+
+    def extract_context(self, text: str, keyword: str, context_size: int = 150) -> str:
+        """Extract a context snippet around a keyword match."""
+        keyword_lower = keyword.lower()
+        text_lower = text.lower()
+
+        # Find the position of the keyword
+        position = text_lower.find(keyword_lower)
+        if position == -1:
+            return ""
+
+        # Calculate the snippet boundaries
+        start = max(0, position - context_size // 2)
+        end = min(len(text), position + len(keyword) + context_size // 2)
+
+        # Extract the snippet
+        snippet = text[start:end]
+
+        # Add ellipses if the snippet doesn't start/end at text boundaries
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(text):
+            snippet = snippet + "..."
+
+        return snippet
 
     async def run_analysis(self) -> Dict[str, int]:
         """Run analysis on all unanalyzed content."""

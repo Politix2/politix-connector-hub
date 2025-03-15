@@ -7,7 +7,7 @@ This script uploads and executes the SQL file via Supabase's dashboard.
 import os
 import sys
 
-import httpx
+import requests
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -68,15 +68,52 @@ def run_migration():
 
         logger.info("Running migration...")
 
-        # Note: This is a simplified example and may not work directly with all Supabase installations
-        # The Supabase client doesn't have a direct method to execute arbitrary SQL
-        # You may need to use the Supabase REST API directly or use the dashboard
+        # Execute the SQL using Supabase REST API
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+
+        sql_endpoint = f"{SUPABASE_URL}/rest/v1/rpc/exec_sql"
+        response = requests.post(sql_endpoint, headers=headers, json={"query": sql})
+
+        if response.status_code != 200:
+            logger.error(
+                f"Error executing SQL: {response.status_code} - {response.text}"
+            )
+            raise Exception(f"Failed to execute SQL: {response.text}")
+
+        logger.info("SQL executed successfully")
+
+        # List all tables we expect to be created
+        tables = [
+            "users",
+            "topics",
+            "topic_subscriptions",
+            "topic_mentions",
+            "plenary_sessions",
+            "tweets",
+            "topic_analyses",
+        ]
+
+        # Verify that tables exist
+        for table in tables:
+            verify_endpoint = f"{SUPABASE_URL}/rest/v1/{table}?limit=0"
+            verify_response = requests.get(verify_endpoint, headers=headers)
+
+            if verify_response.status_code != 200:
+                logger.warning(
+                    f"Table '{table}' might not have been created successfully: {verify_response.status_code}"
+                )
+            else:
+                logger.info(f"Verified table '{table}' exists")
 
         logger.info("Migration complete!")
         logger.info("Tables created successfully:")
-        logger.info("- plenary_sessions")
-        logger.info("- tweets")
-        logger.info("- topic_analyses")
+        for table in tables:
+            logger.info(f"- {table}")
     except Exception as e:
         logger.error(f"Error running migration: {e}")
         logger.error(
