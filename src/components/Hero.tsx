@@ -1,6 +1,6 @@
 
 import { Button } from "@/components/ui/button";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, BarChart2, PieChart, Globe } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const Hero = () => {
@@ -10,10 +10,10 @@ const Hero = () => {
         <div className="flex flex-col md:flex-row items-center">
           <div className="md:w-1/2 mb-10 md:mb-0 animate-slide-up">
             <h1 className="text-4xl md:text-5xl font-bold mb-6 leading-tight">
-              Politics Simplified Through Data Visualization
+              Regulatory Pulse: Your Smart Public Affairs Companion
             </h1>
             <p className="text-lg md:text-xl mb-8 text-gray-200 max-w-lg">
-              Understand complex political landscapes with intuitive visualizations and real-time analytics.
+              Stay ahead of political and legislative developments that impact your business with AI-powered insights and strategic guidance.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Button 
@@ -21,14 +21,14 @@ const Hero = () => {
                 asChild
               >
                 <Link to="/dashboard">
-                  Explore Dashboard <ArrowRight className="ml-2 h-5 w-5" />
+                  Launch Dashboard <ArrowRight className="ml-2 h-5 w-5" />
                 </Link>
               </Button>
               <Button 
                 variant="outline" 
                 className="border-white text-white hover:bg-white/10 transition-colors text-base px-6 py-6"
               >
-                Learn More
+                See How It Works
               </Button>
             </div>
           </div>
