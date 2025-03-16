@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: politix
+    buildFilter:
+      paths:
+        - Dockerfile
+        - backend/**
+    envVars:
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: PORT
+        value: 8000
+    numInstances: 1 
