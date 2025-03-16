@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from app.db import db
-from app.llm import llm
 from app.models import (
     PlenarySession,
     Topic,
@@ -12,6 +11,7 @@ from app.models import (
     TopicMention,
     Tweet,
 )
+from app.services import llm
 
 
 class ContentAnalyzer:

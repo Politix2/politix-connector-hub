@@ -16,11 +16,9 @@ from app.models import (
     TopicMentionResponse,
     TopicResponse,
     TopicSubscription,
-    TopicSubscriptionCreate,
     TopicUpdate,
     Tweet,
     User,
-    UserCreate,
 )
 from app.services.analyzer import analyzer
 from app.services.collector import collector
@@ -127,20 +125,6 @@ async def health_check():
 
 
 # User endpoints
-@router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
-async def create_user(user: UserCreate):
-    """Create a new user."""
-    # Check if user with this email already exists
-    existing_user = db.get_user_by_email(user.email)
-    if existing_user:
-        raise HTTPException(
-            status_code=400, detail="User with this email already exists"
-        )
-
-    # Create new user
-    user = User(email=user.email, name=user.name, created_at=datetime.utcnow())
-    created_user = db.insert_user(user)
-    return created_user
 
 
 @router.get("/users/{user_id}", response_model=User)

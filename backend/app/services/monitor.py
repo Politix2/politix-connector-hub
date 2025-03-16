@@ -6,8 +6,9 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from app.db import db
-from app.llm import llm
 from app.models import PlenarySession, TopicAnalysis, Tweet
+from app.services import llm
+
 
 class TopicMonitor:
     """Service for monitoring topics in plenary sessions and tweets."""
