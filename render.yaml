@@ -2,7 +2,7 @@ services:
   - type: web
     name: politix
     env: python
-    buildCommand: pip install -r backend/requirements.txt && pip install mistralai==0.0.7
+    buildCommand: pip install -r backend/requirements.txt && pip install mistralai==0.0.7 apscheduler
     startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MISTRAL_API_KEY
