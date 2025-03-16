@@ -12662,6 +12662,18 @@ With these changes, Render should now be able to properly identify your service 
 
 ---
 
+_**User**_
+
+remove the docker file. change the render config to not use docker
+
+---
+
+_**Assistant**_
+
+
+
+---
+
 
 
 ---

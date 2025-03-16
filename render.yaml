@@ -1,11 +1,10 @@
 services:
   - type: web
     name: politix
-    runtime: docker
-    buildFilter:
-      paths:
-        - Dockerfile
-        - backend/**
+    env: python
+    pythonVersion: 3.11
+    buildCommand: pip install -r backend/requirements.txt && pip install mistralai==0.0.7
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MISTRAL_API_KEY
         sync: false
@@ -13,6 +12,8 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: PYTHONPATH
+        value: ${RENDER_PROJECT_DIR}/backend
       - key: PORT
         value: 8000
-    numInstances: 1 
+    healthCheckPath: /health 
