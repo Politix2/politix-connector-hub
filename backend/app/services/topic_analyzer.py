@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import dotenv
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -22,6 +23,8 @@ try:
 except ImportError as e:
     logger.error(f"Failed to import Mistral client: {e}")
     sys.exit(1)
+
+dotenv.load_dotenv()
 
 # Configure Supabase client
 supabase_url = os.getenv("SUPABASE_URL")
@@ -95,18 +98,36 @@ You are a political analyst assistant tasked with finding and analyzing content 
 
 TASK:
 1. Find and extract ALL relevant text from the plenary sessions and tweets that is connected to the given topic.
-2. For each relevant extract, provide the source (session or tweet ID).
+2. Identify the most significant or recent discussion about this topic from the provided content.
 3. Analyze what political opinions, positions, and sentiments are expressed about this topic.
 4. Summarize the overall discourse around this topic.
 5. Provide context about why this topic is politically significant based on the content.
 
-Format your response as a structured JSON with the following keys:
+IMPORTANT: Your response must be ONLY valid JSON. Do not include any explanations, markdown formatting, code blocks, or additional text. Your entire response should be parseable by json.loads().
+
+Format your response STRICTLY as a JSON object with the following keys:
+- "date": Format as "Month Day, Year" based on when the most significant discussion occurred
+- "title": A concise title for the most important insight or discussion found
+- "source": The specific source (e.g., "Parliamentary Committee on AI Safety" or similar relevant body)
+- "priority": Use only one of these values: "urgent", "important", "routine", or "informational" 
+- "description": A concise summary of the key insight or discussion (1-2 sentences)
+- "details": More detailed information about the discussion and requirements
+- "topics": A list of strings representing all topics discussed in relation to the main topic
 - "relevant_extracts": List of found relevant text segments with source IDs
-- "opinions": Analysis of different political opinions expressed
-- "summary": Overall summary of discourse
-- "context": Political context and significance
-- "sentiment": Overall sentiment (positive, negative, neutral, mixed)
-- "key_stakeholders": Key politicians or parties mentioned in relation to the topic
+- "sentiment": Use only one of these values: "positive", "negative", "neutral", or "mixed"
+
+Example of the expected response format:
+{{
+  "date": "March 15, 2024",
+  "title": "Parliamentary Debate on Migration Policy",
+  "source": "European Parliament Plenary Session",
+  "priority": "important",
+  "description": "MEPs debated new proposals for strengthening the EU migration framework with divergent opinions on border security versus humanitarian concerns.",
+  "details": "The plenary session featured extensive discussion on the Migration and Asylum Pact, with conservative members emphasizing border security while progressive members focused on humanitarian protections.",
+  "topics": ["migration", "asylum policy", "border security", "humanitarian aid"],
+  "relevant_extracts": ["Session 1: MEPs emphasized the need for a balanced approach...", "Tweet 3: @MEP_Smith argues that humanitarian concerns must be prioritized..."],
+  "sentiment": "mixed"
+}}
 
 {topic_info}
 
@@ -146,24 +167,126 @@ THE CONTENT TO ANALYZE:
         analysis_text = response.choices[0].message.content
 
         # Process the response (assuming it's properly formatted JSON)
-        # In a production system, we should add error handling for malformed responses
         import json
+        import re
+
+        # Clean up the response text to handle potential formatting issues
+        cleaned_text = analysis_text.strip()
+
+        # Remove markdown code blocks if present
+        if cleaned_text.startswith("```json") and cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[7:-3].strip()
+        elif cleaned_text.startswith("```") and cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[3:-3].strip()
+
+        # Remove any leading/trailing text that's not part of the JSON
+        json_start = cleaned_text.find("{")
+        json_end = cleaned_text.rfind("}")
+        if json_start != -1 and json_end != -1:
+            cleaned_text = cleaned_text[json_start : json_end + 1]
 
         try:
-            analysis_data = json.loads(analysis_text)
-        except json.JSONDecodeError:
-            # If JSON parsing fails, save the raw response
-            analysis_data = {"raw_response": analysis_text}
+            analysis_data = json.loads(cleaned_text)
+
+            # Log successful JSON parsing
+            logger.info("Successfully parsed JSON response from LLM")
+
+            # Ensure required fields are present with default values if missing
+            required_fields = {
+                "date": datetime.now().strftime("%B %d, %Y"),
+                "title": f"Analysis of {topic['name']}",
+                "source": "Automatic Topic Analysis",
+                "priority": "routine",
+                "description": "No specific description provided by analysis",
+                "details": "No detailed information provided by analysis",
+                "topics": topic["keywords"] if "keywords" in topic else ["general"],
+                "sentiment": "neutral",  # Default sentiment
+            }
+
+            # Add any missing required fields to the analysis data
+            for field, default_value in required_fields.items():
+                if field not in analysis_data:
+                    analysis_data[field] = default_value
+                    logger.warning(
+                        f"Missing required field '{field}' in LLM response, using default"
+                    )
+
+        except json.JSONDecodeError as e:
+            # If JSON parsing fails, create a structured response with the raw text
+            logger.error(f"Failed to parse JSON from LLM response: {e}")
+            logger.debug(f"Raw response: {analysis_text}")
+            current_date = datetime.now().strftime("%B %d, %Y")
+            analysis_data = {
+                "date": current_date,
+                "title": f"Analysis of {topic['name']}",
+                "source": "Automatic Topic Analysis",
+                "priority": "routine",
+                "description": "Analysis output could not be properly formatted",
+                "details": f"Error parsing LLM output: {e}. First 500 characters: {analysis_text[:500]}...",
+                "topics": topic["keywords"] if "keywords" in topic else ["general"],
+                "sentiment": "neutral",  # Default sentiment
+                "raw_response": analysis_text,
+            }
+
+        # Get a content_id and content_type from one of the sessions or tweets
+        content_id = None
+        content_type = None
+
+        if sessions:
+            # Use the first session's ID as content_id
+            content_id = sessions[0]["id"]
+            content_type = "plenary_session"
+        elif tweets:
+            # If no sessions, use the first tweet's ID as content_id
+            content_id = tweets[0]["id"]
+            content_type = "tweet"
+        else:
+            # If no sessions or tweets, log an error and use placeholders
+            logger.error("No sessions or tweets found to associate with this analysis")
+            # Create a placeholder UUID for content_id
+            import uuid
+
+            content_id = str(uuid.uuid4())
+            content_type = "generated"  # Generic type for generated content
+
+        # Ensure sentiment is one of the valid values
+        valid_sentiments = ["positive", "negative", "neutral", "mixed"]
+        sentiment = analysis_data.get("sentiment", "neutral")
+        if sentiment not in valid_sentiments:
+            logger.warning(
+                f"Invalid sentiment value '{sentiment}', defaulting to 'neutral'"
+            )
+            sentiment = "neutral"  # Default to neutral if invalid
+
+        # Extract topics from analysis data or use keywords
+        topics = analysis_data.get("topics", [])
+        if not topics:
+            topics = (
+                topic["keywords"]
+                if "keywords" in topic and topic["keywords"]
+                else ["general"]
+            )
 
         # Store result in database
         analysis_record = {
             "topic_id": topic_id,
+            "content_id": content_id,
+            "content_type": content_type,
             "analysis_data": analysis_data,
             "relevant_extracts": analysis_data.get("relevant_extracts", []),
-            "summary": analysis_data.get("summary", ""),
-            "sentiment": analysis_data.get("sentiment", ""),
+            "summary": analysis_data.get("description", "No description available"),
+            "sentiment": sentiment,
+            "topics": topics,  # Add topics as separate field
             "analyzed_at": datetime.now().isoformat(),
         }
+
+        # Add debug output for the raw response
+        print("\n=== RAW LLM RESPONSE ===")
+        print(analysis_text)
+        print("\n=== CLEANED AND PARSED RESULT ===")
+        import pprint
+
+        pprint.pprint(analysis_data)
 
         # Store in database
         response = supabase.table("topic_analyses").insert(analysis_record).execute()
@@ -185,149 +308,263 @@ THE CONTENT TO ANALYZE:
         )
         return response.data
 
+    def fetch_user_topics(self, user_id: str) -> List[Dict[str, Any]]:
+        """Fetch all topics belonging to a specific user."""
+        response = supabase.table("topics").select("*").eq("user_id", user_id).execute()
+        return response.data
+
+    def analyze_all_user_topics(
+        self, user_id: str, skip_existing: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Analyze all topics belonging to a specific user.
+
+        Args:
+            user_id: The ID of the user whose topics will be analyzed
+            skip_existing: If True, skip topics that already have analyses
+
+        Returns:
+            A dictionary with results of the operation
+        """
+        # Fetch all topics for this user
+        topics = self.fetch_user_topics(user_id)
+
+        if not topics:
+            logger.warning(f"No topics found for user {user_id}")
+            return {
+                "success": False,
+                "message": f"No topics found for user {user_id}",
+                "topics_analyzed": 0,
+                "topics_skipped": 0,
+                "topics_failed": 0,
+                "results": [],
+            }
+
+        # Keep track of results
+        results = []
+        topics_analyzed = 0
+        topics_skipped = 0
+        topics_failed = 0
+
+        logger.info(f"Starting analysis of {len(topics)} topics for user {user_id}")
+
+        # Process each topic
+        for topic in topics:
+            topic_id = topic["id"]
+            topic_name = topic["name"]
+
+            # Check if this topic already has analyses
+            if skip_existing:
+                existing_analyses = self.get_analyses_for_topic(topic_id)
+                if existing_analyses:
+                    logger.info(
+                        f"Skipping topic '{topic_name}' ({topic_id}) - already has {len(existing_analyses)} analyses"
+                    )
+                    topics_skipped += 1
+                    results.append(
+                        {
+                            "topic_id": topic_id,
+                            "topic_name": topic_name,
+                            "status": "skipped",
+                            "reason": f"Already has {len(existing_analyses)} analyses",
+                        }
+                    )
+                    continue
+
+            # Analyze this topic
+            logger.info(f"Analyzing topic '{topic_name}' ({topic_id})")
+            try:
+                analysis_result = self.analyze_topic(topic_id)
+                if analysis_result:
+                    topics_analyzed += 1
+                    results.append(
+                        {
+                            "topic_id": topic_id,
+                            "topic_name": topic_name,
+                            "status": "success",
+                            "analysis_id": analysis_result.get("id"),
+                        }
+                    )
+                    logger.info(
+                        f"Successfully analyzed topic '{topic_name}' ({topic_id})"
+                    )
+                else:
+                    topics_failed += 1
+                    results.append(
+                        {
+                            "topic_id": topic_id,
+                            "topic_name": topic_name,
+                            "status": "failed",
+                            "reason": "Analysis function returned None",
+                        }
+                    )
+                    logger.error(f"Failed to analyze topic '{topic_name}' ({topic_id})")
+            except Exception as e:
+                topics_failed += 1
+                results.append(
+                    {
+                        "topic_id": topic_id,
+                        "topic_name": topic_name,
+                        "status": "failed",
+                        "reason": str(e),
+                    }
+                )
+                logger.error(f"Error analyzing topic '{topic_name}' ({topic_id}): {e}")
+                import traceback
+
+                logger.debug(traceback.format_exc())
+
+        # Return summary
+        return {
+            "success": True,
+            "message": f"Analyzed {topics_analyzed} topics, skipped {topics_skipped}, failed {topics_failed}",
+            "topics_analyzed": topics_analyzed,
+            "topics_skipped": topics_skipped,
+            "topics_failed": topics_failed,
+            "results": results,
+        }
+
 
 def main():
     """
-    Run the topic analyzer directly from command line.
+    Run the topic analyzer directly without parameters.
+    This function uses hardcoded values for quick testing.
     """
-    import argparse
-    import json
+    # Hardcoded values for testing - USE VALID IDs FROM YOUR DATABASE
+    topic_id = "e422e1eb-b72e-4be3-8bb6-d53ffe41d3d4"  # ID of the topic to analyze
 
-    parser = argparse.ArgumentParser(description="Run the topic analyzer")
-    parser.add_argument("topic_id", help="ID of the topic to analyze")
-    parser.add_argument(
-        "--sessions",
-        type=int,
-        default=5,
-        help="Number of plenary sessions to analyze (default: 5)",
-    )
-    parser.add_argument(
-        "--tweets",
-        type=int,
-        default=10,
-        help="Number of tweets to analyze (default: 10)",
-    )
-    parser.add_argument(
-        "--show-prompt", action="store_true", help="Display the generated prompt"
-    )
-    parser.add_argument(
-        "--show-extracts",
-        type=int,
-        default=3,
-        help="Number of extracts to display (default: 3)",
-    )
-    parser.add_argument(
-        "--only-prompt",
-        action="store_true",
-        help="Only generate and show the prompt, don't run analysis",
-    )
-
-    args = parser.parse_args()
+    # Change this to True to analyze all topics for a user instead of a single topic
+    analyze_user_topics = True
+    user_id = "67c4d1bb-5ac1-4514-b7ec-88e56a5de123"  # Only used if analyze_user_topics is True
+    skip_existing_analyses = True  # Skip topics that already have analyses
 
     try:
         # Initialize the analyzer
         analyzer = TopicAnalyzer()
 
-        # Fetch the topic details
-        try:
-            topic = analyzer.fetch_topic_details(args.topic_id)
-            print(f"\nTopic: {topic['name']}")
-            print(f"Description: {topic['description'] or 'N/A'}")
-            print(f"Keywords: {', '.join(topic['keywords'])}")
-        except ValueError as e:
-            print(f"Error: Topic not found - {e}")
-            return 1
+        if analyze_user_topics:
+            # Analyze all topics for a user
+            print(f"\nAnalyzing all topics for user: {user_id}")
+            if not skip_existing_analyses:
+                print(
+                    "Note: Analyzing ALL topics, including those with existing analyses"
+                )
 
-        # Fetch the data for analysis
-        sessions = analyzer.fetch_plenary_sessions(limit=args.sessions)
-        print(f"\nFetched {len(sessions)} plenary sessions")
+            # Run the analysis
+            result = analyzer.analyze_all_user_topics(user_id, skip_existing_analyses)
 
-        tweets = analyzer.fetch_tweets(limit=args.tweets)
-        print(f"Fetched {len(tweets)} tweets")
+            # Display the results
+            print("\n=== ANALYSIS SUMMARY ===")
+            print(f"Status: {'Success' if result['success'] else 'Failed'}")
+            print(f"Message: {result['message']}")
+            print(f"Topics analyzed: {result['topics_analyzed']}")
+            print(f"Topics skipped: {result['topics_skipped']}")
+            print(f"Topics failed: {result['topics_failed']}")
 
-        # Generate the prompt
-        prompt = analyzer.create_analysis_prompt(topic, sessions, tweets)
+            if result["results"]:
+                print("\nDetailed results:")
+                for res in result["results"]:
+                    status_display = {
+                        "success": "✅ Success",
+                        "skipped": "⏭️ Skipped",
+                        "failed": "❌ Failed",
+                    }.get(res["status"], res["status"])
 
-        # Show the prompt if requested
-        if args.show_prompt or args.only_prompt:
-            print("\n--- ANALYSIS PROMPT ---\n")
-            print(prompt)
-            print("\n--- END PROMPT ---\n")
+                    print(
+                        f"  - {res['topic_name']} ({res['topic_id']}): {status_display}"
+                    )
+                    if res["status"] == "failed":
+                        print(f"    Reason: {res.get('reason', 'Unknown error')}")
+        else:
+            # Analyze a single topic
+            # Fetch the topic details
+            try:
+                topic = analyzer.fetch_topic_details(topic_id)
+                print(f"\nAnalyzing Topic: {topic['name']}")
+                print(f"Description: {topic['description'] or 'N/A'}")
+                print(f"Keywords: {', '.join(topic['keywords'])}")
+            except ValueError as e:
+                print(f"Error: Topic not found - {e}")
+                return 1
 
-        # Exit if only showing the prompt
-        if args.only_prompt:
-            return 0
+            # Fetch the sessions and tweets and print info for debugging
+            sessions = analyzer.fetch_plenary_sessions()
+            tweets = analyzer.fetch_tweets()
 
-        # Run the analysis
-        print("\nRunning analysis...")
+            print(f"\n=== DATA BEING ANALYZED ===")
+            print(f"Number of plenary sessions: {len(sessions)}")
+            if sessions:
+                print("First few plenary sessions:")
+                for i, session in enumerate(sessions[:3]):  # Show first 3 sessions
+                    print(
+                        f"  - {session.get('title', 'No title')} ({session.get('date', 'No date')})"
+                    )
+                    print(f"    ID: {session.get('id', 'No ID')}")
+                    content_preview = (
+                        session.get("content", "")[:100] + "..."
+                        if session.get("content")
+                        else "No content"
+                    )
+                    print(f"    Content preview: {content_preview}")
+            else:
+                print("No plenary sessions found.")
 
-        result = analyzer.analyze_topic(args.topic_id)
+            print(f"\nNumber of tweets: {len(tweets)}")
+            if tweets:
+                print("First few tweets:")
+                for i, tweet in enumerate(tweets[:3]):  # Show first 3 tweets
+                    print(
+                        f"  - @{tweet.get('user_handle', 'No handle')} ({tweet.get('posted_at', 'No date')})"
+                    )
+                    print(f"    ID: {tweet.get('id', 'No ID')}")
+                    content_preview = (
+                        tweet.get("content", "")[:100] + "..."
+                        if tweet.get("content")
+                        else "No content"
+                    )
+                    print(f"    Content preview: {content_preview}")
+            else:
+                print("No tweets found.")
 
-        if not result:
-            print("Error: Analysis failed")
-            return 1
+            # Run the analysis
+            print("\nRunning analysis...")
+            result = analyzer.analyze_topic(topic_id)
 
-        # Display the results
-        print("\n=== ANALYSIS RESULTS ===\n")
+            if not result:
+                print("Error: Analysis failed")
+                return 1
 
-        print(f"Analysis ID: {result.get('id', 'Unknown')}")
-        print(f"Analyzed at: {result.get('analyzed_at', 'Unknown')}")
+            # Display the results
+            print("\n=== ANALYSIS RESULTS ===\n")
+            print(f"Analysis ID: {result.get('id', 'Unknown')}")
+            print(f"Analyzed at: {result.get('analyzed_at', 'Unknown')}")
 
-        print("\n--- SUMMARY ---")
-        print(result.get("summary", "No summary available"))
+            if "analysis_data" in result:
+                analysis_data = result["analysis_data"]
 
-        print("\n--- SENTIMENT ---")
-        print(result.get("sentiment", "No sentiment available"))
+                # Display main analysis fields
+                print(f"\nDate: {analysis_data.get('date', 'Not specified')}")
+                print(f"Title: {analysis_data.get('title', 'Not specified')}")
+                print(f"Source: {analysis_data.get('source', 'Not specified')}")
+                print(
+                    f"Priority: {analysis_data.get('priority', 'Not specified').upper()}"
+                )
+                print(
+                    f"\nDescription: {analysis_data.get('description', 'No description available')}"
+                )
 
-        # Show the detailed analysis data
-        if "analysis_data" in result:
-            analysis_data = result["analysis_data"]
-
-            # Show key stakeholders
-            if "key_stakeholders" in analysis_data:
-                print("\n--- KEY STAKEHOLDERS ---")
-                for stakeholder in analysis_data["key_stakeholders"]:
-                    print(f"- {stakeholder}")
-
-            # Show opinions
-            if "opinions" in analysis_data:
-                print("\n--- OPINIONS ---")
-                print(analysis_data["opinions"])
-
-            # Show political context
-            if "context" in analysis_data:
-                print("\n--- POLITICAL CONTEXT ---")
-                print(analysis_data["context"])
-
-            # Show extracts
-            if "relevant_extracts" in analysis_data:
-                extracts = analysis_data["relevant_extracts"]
-                limit = min(len(extracts), args.show_extracts)
+                # Display topics
+                if "topics" in analysis_data and analysis_data["topics"]:
+                    print("\nTopics:")
+                    for topic in analysis_data["topics"]:
+                        print(f"- {topic}")
 
                 print(
-                    f"\n--- RELEVANT EXTRACTS ({len(extracts)} found, showing {limit}) ---"
+                    f"\nSentiment: {analysis_data.get('sentiment', 'No sentiment analysis available')}"
                 )
-                for i, extract in enumerate(extracts[:limit]):
-                    print(f"\nExtract {i + 1} from {extract.get('source', 'unknown')}")
-                    print("-" * 40)
-                    print(extract.get("text", "No text"))
-                    print("-" * 40)
 
-            # Show the full JSON if there are other keys
-            other_keys = set(analysis_data.keys()) - {
-                "key_stakeholders",
-                "opinions",
-                "context",
-                "relevant_extracts",
-                "summary",
-                "sentiment",
-            }
-            if other_keys:
-                print("\n--- OTHER DATA ---")
-                other_data = {k: analysis_data[k] for k in other_keys}
-                print(json.dumps(other_data, indent=2))
+            print("\nAnalysis completed and stored in database.")
 
-        print("\nAnalysis completed and stored in database.")
         return 0
 
     except Exception as e:

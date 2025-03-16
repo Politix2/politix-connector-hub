@@ -27,9 +27,9 @@ fi
 
 # Apply database migrations if needed
 echo "Checking database migrations..."
-if [ -f "/app/migrations/run_migrations.py" ]; then
+if [ -f "/workspace/migrations/run_migrations.py" ]; then
   echo "Running database migrations..."
-  python /app/migrations/run_migrations.py
+  python /workspace/migrations/run_migrations.py
 fi
 
 # Start the application

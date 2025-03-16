@@ -99,6 +99,26 @@ class TopicAnalysisRequest(BaseModel):
     topic_id: str
 
 
+class UserTopicsAnalysisRequest(BaseModel):
+    """Request to analyze all topics for a user."""
+
+    user_id: str
+    analyze_existing: bool = (
+        False  # Whether to analyze topics that already have analyses
+    )
+
+
+class UserTopicsAnalysisResponse(BaseModel):
+    """Response from analyzing all topics for a user."""
+
+    success: bool
+    message: str
+    topics_analyzed: int
+    topics_skipped: int
+    topics_failed: int
+    results: List[Dict[str, Any]]
+
+
 # Endpoints
 @router.get("/health")
 async def health_check():
@@ -468,4 +488,30 @@ async def get_topic_analyses(topic_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving analyses: {str(e)}",
+        )
+
+
+@router.post("/user-topics-analysis", response_model=UserTopicsAnalysisResponse)
+async def analyze_user_topics(request: UserTopicsAnalysisRequest):
+    """Analyze all topics for a specific user."""
+    try:
+        result = topic_analyzer.analyze_all_user_topics(
+            request.user_id, not request.analyze_existing
+        )
+        return UserTopicsAnalysisResponse(
+            success=True,
+            message="Topics analyzed successfully",
+            topics_analyzed=result["topics_analyzed"],
+            topics_skipped=result["topics_skipped"],
+            topics_failed=result["topics_failed"],
+            results=result["results"],
+        )
+    except Exception as e:
+        return UserTopicsAnalysisResponse(
+            success=False,
+            message=f"Error analyzing topics: {str(e)}",
+            topics_analyzed=0,
+            topics_skipped=0,
+            topics_failed=0,
+            results=[],
         )
